@@ -86,7 +86,9 @@ test("team board: create, assign, edit, comment, filter, realtime and mobile", a
   });
   await handle.focus();
   await page.keyboard.press("Space");
+  await expect(page.locator("[aria-live=assertive]")).toContainText("You have lifted");
   await page.keyboard.press("ArrowRight");
+  await expect(page.locator("[aria-live=assertive]")).toContainText("to list Done");
   await page.keyboard.press("Space");
   await expect(
     page.locator(".column-2").getByRole("button", { name: "Review checkout", exact: true }),
