@@ -1,0 +1,25 @@
+# Deploy the API first; connect the frontend once Render assigns the API URL.
+# MongoDB is external. Supply MONGO_URI privately in Render's Blueprint form.
+services:
+  - type: web
+    name: jira-clone-api
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    rootDir: server
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: "22.16.0"
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLIENT_ORIGIN
+        sync: false

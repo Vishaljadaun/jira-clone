@@ -121,7 +121,15 @@ Playwright starts an isolated API/database and Vite automatically. The scenario 
 
 ## Deployment configuration
 
-This update includes configuration for separate frontend/API hosting but does not provision a new live deployment.
+The repository includes `render.yaml` for a free-plan API service in Singapore. A hosted MongoDB database is required before the API can start. The Blueprint generates a fresh JWT signing secret; it does not reuse the previously committed value.
+
+1. Create or use a MongoDB Atlas database. Create a database user restricted to the application's database, then choose **Connect → Drivers** to obtain its connection string. Use a dedicated database such as `jira_clone` and enter credentials only in private hosting settings. Configure Atlas network access for the Render service's outbound IP ranges.
+2. [Open the Render Blueprint](https://dashboard.render.com/blueprint/new?repo=https://github.com/Vishaljadaun/jira-clone), choose your workspace, and supply `MONGO_URI`. For `CLIENT_ORIGIN`, enter the frontend's exact HTTPS origin if already known; otherwise temporarily use `http://localhost:5173` and replace it after the frontend is created.
+3. Wait for the API to become live and check its `/health` URL. Copy its assigned public origin from Render; do not guess the generated hostname.
+4. Create a Render static site from this repository with branch `main`, build command `npm ci --prefix client && npm run build --prefix client`, and publish directory `client/dist`. Set `NODE_VERSION=22.16.0` and `VITE_SERVER_URL` to the API's actual public origin. Add a **Rewrite** from `/*` to `/index.html` for browser routing.
+5. Set the API's `CLIENT_ORIGIN` to the static site's actual HTTPS origin and redeploy the API. Test registration, login, task creation and live updates in two browser profiles.
+
+The Blueprint configures only the API so the frontend can be wired to its real assigned URL. It does not create an Atlas database or mean that a live deployment has already completed. Free-plan API instances can sleep when idle; the first request may need time to wake up. Profile uploads still require persistent storage for durability across deploys.
 
 - Backend: install with `npm ci`, run `npm start`, using `server` as the service root. Supply private `MONGO_URI`, `JWT_SECRET`, `CLIENT_ORIGIN` and the host's `PORT`.
 - Frontend: install/build in `client` using `npm ci && npm run build`; publish `client/dist`.
