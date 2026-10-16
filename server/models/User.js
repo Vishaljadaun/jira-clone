@@ -48,19 +48,9 @@ const userSchema = mongoose.Schema(
 
 // 3. MIDDLEWARE: ENCRYPT PASSWORD BEFORE SAVING
 // This function runs automatically BEFORE (.pre) we 'save' a user to the DB.
-userSchema.pre('save', async function (next) {
-  // 'this' refers to the user object being saved
-  
-  // If the password hasn't been modified (e.g., we are just updating the name), skip hashing
-  if (!this.isModified('password')) {
-    next();
-  }
-
-  // Generate a "salt" (random data to make the hash complex)
-  const salt = await bcrypt.genSalt(10);
-  
-  // Replace the plain text password with the hashed version
-  this.password = await bcrypt.hash(this.password, salt);
+userSchema.pre('save', async function () {
+  if (!this.isModified('password')) return;
+  this.password = await bcrypt.hash(this.password, 10);
 });
 
 // 4. METHOD: CHECK PASSWORD

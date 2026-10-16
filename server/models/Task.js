@@ -4,6 +4,7 @@ const taskSchema = mongoose.Schema(
   {
     title: { type: String, required: true },
     description: { type: String },
+    dueDate: { type: String, default: null },
     
     // Status corresponds to the Kanban columns
     status: {
@@ -47,7 +48,7 @@ comments: [
 
     
   },
-  { timestamps: true }
+  { timestamps: true, optimisticConcurrency: true }
 );
 
 const Task = mongoose.model('Task', taskSchema);

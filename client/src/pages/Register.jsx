@@ -1,5 +1,5 @@
 import { useState, useContext } from "react";
-import AuthContext from "../context/AuthContext";
+import AuthContext from "../context/auth";
 import { useNavigate, Link } from "react-router-dom";
 
 const Register = () => {
@@ -38,7 +38,9 @@ const Register = () => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">Full Name</label>
+            <label className="block text-sm font-medium text-gray-700">
+              Full Name
+            </label>
             <input
               type="text"
               className="w-full px-3 py-2 mt-1 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
@@ -50,7 +52,9 @@ const Register = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Email Address</label>
+            <label className="block text-sm font-medium text-gray-700">
+              Email Address
+            </label>
             <input
               type="email"
               className="w-full px-3 py-2 mt-1 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
@@ -62,7 +66,9 @@ const Register = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Password</label>
+            <label className="block text-sm font-medium text-gray-700">
+              Password
+            </label>
             <input
               type="password"
               className="w-full px-3 py-2 mt-1 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
@@ -80,9 +86,12 @@ const Register = () => {
             Sign Up
           </button>
         </form>
-        
+
         <div className="text-sm text-center text-gray-600">
-            Already have an account? <Link to="/login" className="text-blue-500 hover:underline">Login</Link>
+          Already have an account?{" "}
+          <Link to="/login" className="text-blue-500 hover:underline">
+            Login
+          </Link>
         </div>
       </div>
     </div>

@@ -1,333 +1,694 @@
-import { useEffect, useState, useContext } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useState, useContext, useCallback, useRef } from "react";
+import { useParams, Link } from "react-router-dom";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import axios from "axios";
-import io from 'socket.io-client';
-import TaskContext from "../context/TaskContext";
-import AuthContext from "../context/AuthContext";
-import Navbar from "../components/Navbar"; // <--- Import
-
-// Define socket outside component to prevent multiple connections
-let socket;
-
-const Board = () => {
+import { io } from "socket.io-client";
+import AuthContext from "../context/auth";
+import Navbar from "../components/Navbar";
+import Dialog from "../components/Dialog";
+import { api, auth, message, serverUrl } from "../lib/api";
+import {
+  statuses,
+  priorities,
+  overdue,
+  filterTasks,
+  tasksCsv,
+} from "../lib/board";
+const blank = {
+  title: "",
+  description: "",
+  priority: "Medium",
+  status: "To Do",
+  assignee: "",
+  dueDate: "",
+};
+export default function Board() {
   const { id } = useParams();
-  const navigate = useNavigate();
-  const { tasks, getTasks, updateTaskStatus, createTask } = useContext(TaskContext);
+  return <ProjectBoard key={id} id={id} />;
+}
+function ProjectBoard({ id }) {
   const { user } = useContext(AuthContext);
-
-  // --- STATE VARIABLES ---
-  const [showModal, setShowModal] = useState(false); // Create Task Modal
-  const [showInviteModal, setShowInviteModal] = useState(false); // Invite User Modal
-  const [selectedTask, setSelectedTask] = useState(null); // Task Details Modal
-  const [commentText, setCommentText] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  
-  const [newTask, setNewTask] = useState({
-    title: "",
-    description: "",
-    priority: "Medium"
+  const [tasks, setTasks] = useState([]);
+  const [project, setProject] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [live, setLive] = useState(false);
+  const [filters, setFilters] = useState({
+    search: "",
+    priority: "",
+    assignee: "",
+    late: false,
   });
-
-  // --- USE EFFECT: SOCKET & DATA FETCHING ---
+  const [editor, setEditor] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [invite, setInvite] = useState(false);
+  const [email, setEmail] = useState("");
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const requestNumber = useRef(0);
+  const load = useCallback(async () => {
+    const request = ++requestNumber.current;
+    try {
+      const [taskResponse, projectResponse] = await Promise.all([
+        api.get(`/api/tasks/${id}`, auth(user)),
+        api.get(`/api/projects/${id}`, auth(user)),
+      ]);
+      if (request !== requestNumber.current) return;
+      setTasks(taskResponse.data);
+      setProject(projectResponse.data);
+      setError("");
+    } catch (e) {
+      if (request === requestNumber.current) setError(message(e));
+    } finally {
+      if (request === requestNumber.current) setLoading(false);
+    }
+  }, [id, user]);
   useEffect(() => {
-    // 1. SAFETY CHECK (Fix for Refresh Bug)
-    if (!user || !id) return;
-
-    // 2. SOCKET CONNECTION
-    socket = io('http://localhost:5000');
-    socket.emit('joinProject', id);
-
-    // Listen for updates from other users
-    socket.on('taskUpdated', () => {
-      getTasks(id);
-      // Optional: If you want the modal to update while open, you'd need more logic here.
-      // For now, closing the modal on update is safer to avoid conflicts.
+    let active = true;
+    const counter = requestNumber;
+    const socket = io(serverUrl || window.location.origin, {
+      auth: { token: user.token },
     });
-
-    // 3. INITIAL FETCH
-    getTasks(id);
-
-    // 4. CLEANUP
+    socket.on("connect", () =>
+      socket.emit("joinProject", id, (reply) => {
+        if (active) {
+          setLive(Boolean(reply.ok));
+          load();
+        }
+      }),
+    );
+    socket.on("disconnect", () => setLive(false));
+    socket.on("connect_error", () => setLive(false));
+    socket.on("taskUpdated", load);
+    socket.on("projectUpdated", load);
+    const timer = setTimeout(load, 0);
     return () => {
+      active = false;
+      clearTimeout(timer);
+      counter.current++;
       socket.disconnect();
     };
-  }, [user, id]);
-
-  // --- KANBAN COLUMNS SETUP ---
-  const columns = {
-    "To Do": tasks.filter((t) => t.status === "To Do"),
-    "In Progress": tasks.filter((t) => t.status === "In Progress"),
-    "Done": tasks.filter((t) => t.status === "Done"),
+  }, [id, user.token, load]);
+  const members = project
+    ? [
+        ...new Map(
+          [project.owner, ...project.members]
+            .filter(Boolean)
+            .map((m) => [m._id, m]),
+        ).values(),
+      ]
+    : [];
+  const visible = filterTasks(tasks, filters);
+  const selected = tasks.find((t) => t._id === selectedId);
+  const done = tasks.filter((t) => t.status === "Done").length;
+  const owner = project?.owner?._id === user._id;
+  const openEditor = (task) => {
+    setEditor(
+      task
+        ? {
+            ...task,
+            assignee: task.assignee?._id || "",
+            dueDate: task.dueDate || "",
+          }
+        : { ...blank },
+    );
+    setSelectedId(null);
+    setFormError("");
   };
-
-  // --- HANDLERS ---
-  const onDragEnd = (result) => {
-    const { source, destination, draggableId } = result;
-    if (!destination) return;
-    if (source.droppableId === destination.droppableId && source.index === destination.index) return;
-    
-    updateTaskStatus(draggableId, destination.droppableId);
-    socket.emit('updateTask', { projectId: id });
-  };
-
-  const handleCreateTask = async (e) => {
-    e.preventDefault();
-    await createTask({
-        ...newTask,
-        projectId: id,
-        status: "To Do"
-    });
-    setShowModal(false);
-    setNewTask({ title: "", description: "", priority: "Medium" });
-    socket.emit('updateTask', { projectId: id }); // Notify others
-  };
-
-  const handleInvite = async (e) => {
-    e.preventDefault();
+  const run = async (action, close) => {
+    if (busy) return;
+    setBusy(true);
+    setFormError("");
     try {
-        const config = { headers: { Authorization: `Bearer ${user.token}` } };
-        await axios.put(`/api/projects/${id}/add-member`, { email: inviteEmail }, config);
-        alert("User added successfully!");
-        setShowInviteModal(false);
-        setInviteEmail("");
-    } catch (error) {
-        alert(error.response?.data?.message || "Failed to add user");
+      await action();
+      await load();
+      close?.();
+    } catch (e) {
+      setFormError(message(e));
+      if (e.response?.status === 409) await load();
+    } finally {
+      setBusy(false);
     }
   };
-
-  const handlePostComment = async () => {
-    if (!commentText.trim()) return;
+  const save = (e) => {
+    e.preventDefault();
+    run(
+      () =>
+        editor._id
+          ? api.put(
+              `/api/tasks/update/${editor._id}`,
+              { ...editor, version: editor.__v },
+              auth(user),
+            )
+          : api.post("/api/tasks", { ...editor, projectId: id }, auth(user)),
+      () => setEditor(null),
+    );
+  };
+  const move = async ({ destination, source, draggableId }) => {
+    if (!destination || source.droppableId === destination.droppableId || busy)
+      return;
+    const task = tasks.find((t) => t._id === draggableId);
+    setBusy(true);
     try {
-        const config = { headers: { Authorization: `Bearer ${user.token}` } };
-        // Call the API endpoint we created earlier
-        await axios.post(`/api/tasks/${selectedTask._id}/comments`, { text: commentText }, config);
-        
-        // Clear text
-        setCommentText("");
-        
-        // Refresh tasks to see the new comment
-        getTasks(id); 
-        
-        // Close modal (simple way to refresh state) 
-        // Or you could manually update 'selectedTask' state if you want to keep it open
-        setSelectedTask(null); 
-        
-        socket.emit('updateTask', { projectId: id }); // Notify others
-    } catch (error) {
-        console.error("Failed to post comment", error);
-        alert("Failed to post comment");
+      await api.put(
+        `/api/tasks/update/${task._id}`,
+        { status: destination.droppableId, version: task.__v },
+        auth(user),
+      );
+      await load();
+    } catch (e) {
+      await load();
+      setError(message(e));
+    } finally {
+      setBusy(false);
     }
   };
-
+  const exportCsv = () => {
+    const url = URL.createObjectURL(
+      new Blob(["\uFEFF", tasksCsv(visible)], {
+        type: "text/csv;charset=utf-8",
+      }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "project-tasks.csv";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const field = (name, value) => setFilters((f) => ({ ...f, [name]: value }));
   return (
-    <div className="min-h-screen bg-blue-50">
+    <div className="workspace">
       <Navbar />
-      {/* HEADER */}
-      <div className="flex justify-between items-center mb-6">
-        <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/project')} className="text-gray-500 hover:text-gray-700">
-                &larr; Back
+      <main className="board-main">
+        <Link className="back-link" to="/project">
+          ← All projects
+        </Link>
+        <header className="board-heading">
+          <div>
+            <p className="eyebrow">TEAM WORKSPACE</p>
+            <h1>{project?.name || "Project board"}</h1>
+            <p className="muted">
+              {project?.description || "Plan clearly. Keep work moving."}
+            </p>
+            <span className={`connection ${live ? "connected" : ""}`}>
+              {live
+                ? "Live updates connected"
+                : "Live updates offline — refresh to sync"}
+            </span>
+          </div>
+          <div className="actions">
+            <button className="secondary" onClick={load}>
+              Refresh
             </button>
-            <h2 className="text-2xl font-bold text-gray-800">Project Board</h2>
-            <button 
-                onClick={() => setShowInviteModal(true)}
-                className="text-sm text-blue-600 underline hover:text-blue-800 ml-2"
+            {owner && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  setInvite(true);
+                  setFormError("");
+                }}
+              >
+                Add member
+              </button>
+            )}
+            <button
+              className="primary"
+              disabled={!project}
+              onClick={() => openEditor()}
             >
-                + Invite Member
+              + Add task
             </button>
-        </div>
-        
-        <button
-            onClick={() => setShowModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 shadow-sm"
-        >
-            + Add Task
-        </button>
-      </div>
-      
-      {/* DRAG AND DROP BOARD */}
-      <DragDropContext onDragEnd={onDragEnd}>
-        <div className="flex gap-6 overflow-x-auto pb-4 h-[calc(100vh-150px)]">
-          {Object.entries(columns).map(([columnId, columnTasks]) => (
-            <Droppable key={columnId} droppableId={columnId}>
-              {(provided) => (
-                <div
-                  ref={provided.innerRef}
-                  {...provided.droppableProps}
-                  className="bg-gray-100 p-4 rounded-lg w-80 min-w-[320px] shadow-md flex flex-col max-h-full"
-                >
-                  <h3 className="font-bold text-gray-700 mb-4 flex justify-between">
-                    {columnId}
-                    <span className="bg-gray-200 text-gray-600 px-2 rounded-full text-sm">
-                        {columnTasks.length}
-                    </span>
-                  </h3>
-
-                  <div className="space-y-3 overflow-y-auto min-h-[100px] pr-2">
-                    {columnTasks.map((task, index) => (
-                      <Draggable key={task._id} draggableId={task._id} index={index}>
-                        {(provided, snapshot) => (
-                          <div
-                            ref={provided.innerRef}
-                            {...provided.draggableProps}
-                            {...provided.dragHandleProps}
-                            
-                            onClick={() => setSelectedTask(task)} // Open Details Modal
-
-                            className={`p-4 bg-white rounded shadow-sm border-l-4 cursor-pointer hover:shadow-md transition
-                              ${snapshot.isDragging ? "shadow-xl rotate-2" : ""}
-                              ${task.priority === 'High' ? 'border-red-500' : 
-                                task.priority === 'Medium' ? 'border-yellow-500' : 'border-green-500'}
-                            `}
-                            style={{ ...provided.draggableProps.style }}
+          </div>
+        </header>
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+        <section className="stats" aria-label="Project progress">
+          <div>
+            <strong>{tasks.length}</strong>
+            <span>Total tasks</span>
+          </div>
+          <div>
+            <strong>
+              {tasks.filter((t) => t.status === "In Progress").length}
+            </strong>
+            <span>In progress</span>
+          </div>
+          <div>
+            <strong>{tasks.filter((t) => overdue(t)).length}</strong>
+            <span>Overdue</span>
+          </div>
+          <div>
+            <strong>
+              {tasks.length ? Math.round((done / tasks.length) * 100) : 0}%
+            </strong>
+            <span>Completed · {done} tasks</span>
+          </div>
+        </section>
+        <section className="filters" aria-label="Task filters">
+          <label className="search-field">
+            Search tasks
+            <input
+              type="search"
+              placeholder="Search title or description…"
+              value={filters.search}
+              onChange={(e) => field("search", e.target.value)}
+            />
+          </label>
+          <label>
+            Priority
+            <select
+              value={filters.priority}
+              onChange={(e) => field("priority", e.target.value)}
+            >
+              <option value="">All priorities</option>
+              {priorities.map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Assignee
+            <select
+              value={filters.assignee}
+              onChange={(e) => field("assignee", e.target.value)}
+            >
+              <option value="">Everyone</option>
+              <option value="unassigned">Unassigned</option>
+              {members.map((m) => (
+                <option key={m._id} value={m._id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={filters.late}
+              onChange={(e) => field("late", e.target.checked)}
+            />
+            Overdue only
+          </label>
+          <button
+            className="secondary"
+            onClick={() =>
+              setFilters({
+                search: "",
+                priority: "",
+                assignee: user._id,
+                late: false,
+              })
+            }
+          >
+            My tasks
+          </button>
+          <button
+            className="text-button"
+            onClick={() =>
+              setFilters({
+                search: "",
+                priority: "",
+                assignee: "",
+                late: false,
+              })
+            }
+          >
+            Clear
+          </button>
+          <button
+            className="secondary"
+            disabled={!visible.length}
+            onClick={exportCsv}
+          >
+            Export CSV
+          </button>
+        </section>
+        <p className="result-count" aria-live="polite">
+          {loading
+            ? "Loading your board…"
+            : `${visible.length} of ${tasks.length} tasks shown · Export includes the current filters`}
+        </p>
+        <DragDropContext onDragEnd={move}>
+          <div className="kanban">
+            {statuses.map((status, column) => (
+              <section className={`column column-${column}`} key={status}>
+                <h2>
+                  <span className="column-dot" />
+                  {status}
+                  <span className="count">
+                    {visible.filter((t) => t.status === status).length}
+                  </span>
+                </h2>
+                <Droppable droppableId={status}>
+                  {(provided) => (
+                    <div
+                      className="task-list"
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                    >
+                      {visible
+                        .filter((t) => t.status === status)
+                        .map((task, index) => (
+                          <Draggable
+                            key={task._id}
+                            draggableId={task._id}
+                            index={index}
+                            isDragDisabled={busy}
                           >
-                            <h4 className="font-medium text-gray-900">{task.title}</h4>
-                            <div className="flex justify-between items-center mt-3">
-                                <span className={`text-xs px-2 py-1 rounded 
-                                  ${task.priority === 'High' ? 'bg-red-100 text-red-800' : 
-                                    task.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
-                                  {task.priority}
-                                </span>
-                                {task.assignee && (
-                                    <div className="w-6 h-6 rounded-full bg-blue-500 text-white text-xs flex items-center justify-center">
-                                        {task.assignee.name.charAt(0)}
-                                    </div>
+                            {(drag) => (
+                              <article
+                                className="task-card"
+                                ref={drag.innerRef}
+                                {...drag.draggableProps}
+                              >
+                                <div className="card-top">
+                                  <span
+                                    className={`priority priority-${task.priority.toLowerCase()}`}
+                                  >
+                                    {task.priority}
+                                  </span>
+                                  <span
+                                    {...drag.dragHandleProps}
+                                    aria-label={`Move ${task.title}`}
+                                    className="drag-handle"
+                                  >
+                                    ⠿
+                                  </span>
+                                </div>
+                                <button
+                                  className="task-title"
+                                  onClick={() => {
+                                    setSelectedId(task._id);
+                                    setComment("");
+                                    setFormError("");
+                                  }}
+                                >
+                                  {task.title}
+                                </button>
+                                {task.description && (
+                                  <p className="task-description">
+                                    {task.description}
+                                  </p>
                                 )}
-                            </div>
-                          </div>
-                        )}
-                      </Draggable>
+                                <footer>
+                                  <span>
+                                    {task.assignee?.name || "Unassigned"}
+                                  </span>
+                                  <span>
+                                    {task.comments?.length || 0} comments
+                                  </span>
+                                </footer>
+                                {task.dueDate && (
+                                  <p
+                                    className={
+                                      overdue(task) ? "due late" : "due"
+                                    }
+                                  >
+                                    {overdue(task) ? "Overdue · " : "Due · "}
+                                    {task.dueDate}
+                                  </p>
+                                )}
+                              </article>
+                            )}
+                          </Draggable>
+                        ))}
+                      {provided.placeholder}
+                      {!visible.some((t) => t.status === status) && (
+                        <p className="empty-column">
+                          {tasks.length
+                            ? "No matching tasks"
+                            : "Your next task starts here"}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </Droppable>
+              </section>
+            ))}
+          </div>
+        </DragDropContext>
+        {editor && (
+          <Dialog
+            title={editor._id ? "Edit task" : "Create task"}
+            onClose={() => !busy && setEditor(null)}
+          >
+            <form onSubmit={save} className="form-stack">
+              <label>
+                Title
+                <input
+                  required
+                  maxLength={200}
+                  autoFocus
+                  value={editor.title}
+                  onChange={(e) =>
+                    setEditor({ ...editor, title: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Description
+                <textarea
+                  rows={4}
+                  maxLength={5000}
+                  value={editor.description || ""}
+                  onChange={(e) =>
+                    setEditor({ ...editor, description: e.target.value })
+                  }
+                />
+              </label>
+              <div className="form-grid">
+                <label>
+                  Status
+                  <select
+                    value={editor.status}
+                    onChange={(e) =>
+                      setEditor({ ...editor, status: e.target.value })
+                    }
+                  >
+                    {statuses.map((s) => (
+                      <option key={s}>{s}</option>
                     ))}
-                    {provided.placeholder}
-                  </div>
+                  </select>
+                </label>
+                <label>
+                  Priority
+                  <select
+                    value={editor.priority}
+                    onChange={(e) =>
+                      setEditor({ ...editor, priority: e.target.value })
+                    }
+                  >
+                    {priorities.map((p) => (
+                      <option key={p}>{p}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Assignee
+                  <select
+                    value={editor.assignee}
+                    onChange={(e) =>
+                      setEditor({ ...editor, assignee: e.target.value })
+                    }
+                  >
+                    <option value="">Unassigned</option>
+                    {members.map((m) => (
+                      <option key={m._id} value={m._id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Due date
+                  <input
+                    type="date"
+                    value={editor.dueDate}
+                    onChange={(e) =>
+                      setEditor({ ...editor, dueDate: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              {formError && (
+                <div role="alert" className="error">
+                  {formError}
+                  {editor._id && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() =>
+                        openEditor(tasks.find((t) => t._id === editor._id))
+                      }
+                    >
+                      Reload saved task (discard edits)
+                    </button>
+                  )}
                 </div>
               )}
-            </Droppable>
-          ))}
-        </div>
-      </DragDropContext>
-
-      {/* --- CREATE TASK MODAL --- */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-md shadow-2xl">
-                <h3 className="text-xl font-bold mb-4">Add New Task</h3>
-                <form onSubmit={handleCreateTask}>
-                    <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
-                        <input 
-                            type="text" 
-                            required
-                            className="w-full border border-gray-300 rounded p-2"
-                            value={newTask.title}
-                            onChange={(e) => setNewTask({...newTask, title: e.target.value})}
-                        />
-                    </div>
-                    <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-                        <textarea 
-                            className="w-full border border-gray-300 rounded p-2"
-                            rows="3"
-                            value={newTask.description}
-                            onChange={(e) => setNewTask({...newTask, description: e.target.value})}
-                        />
-                    </div>
-                    <div className="mb-6">
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-                        <select 
-                            className="w-full border border-gray-300 rounded p-2"
-                            value={newTask.priority}
-                            onChange={(e) => setNewTask({...newTask, priority: e.target.value})}
-                        >
-                            <option value="Low">Low</option>
-                            <option value="Medium">Medium</option>
-                            <option value="High">High</option>
-                        </select>
-                    </div>
-                    <div className="flex justify-end gap-3">
-                        <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
-                        <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Create Task</button>
-                    </div>
-                </form>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => setEditor(null)}
+                >
+                  Cancel
+                </button>
+                <button className="primary" disabled={busy}>
+                  {busy ? "Saving…" : "Save task"}
+                </button>
+              </div>
+            </form>
+          </Dialog>
+        )}
+        {selected && (
+          <Dialog
+            title={selected.title}
+            onClose={() => !busy && setSelectedId(null)}
+          >
+            <div className="form-stack">
+              <p className="muted">
+                {selected.status} · {selected.priority} priority ·{" "}
+                {selected.assignee?.name || "Unassigned"}
+              </p>
+              <p className="preserve-text">
+                {selected.description || "No description yet."}
+              </p>
+              {selected.dueDate && <p>Due {selected.dueDate}</p>}
+              <div className="actions">
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => openEditor(selected)}
+                >
+                  Edit task
+                </button>
+                {(owner ||
+                  (selected.reporter?._id || selected.reporter) ===
+                    user._id) && (
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Delete this task and its comments? This cannot be undone.",
+                        )
+                      )
+                        run(
+                          () =>
+                            api.delete(`/api/tasks/update/${selected._id}`, {
+                              ...auth(user),
+                              data: { version: selected.__v },
+                            }),
+                          () => setSelectedId(null),
+                        );
+                    }}
+                  >
+                    Delete task
+                  </button>
+                )}
+              </div>
+              <h3>Discussion</h3>
+              <div className="comments">
+                {selected.comments?.map((c) => (
+                  <article key={c._id}>
+                    <strong>{c.user?.name || "Former member"}</strong>
+                    <time>{new Date(c.createdAt).toLocaleString()}</time>
+                    <p className="preserve-text">{c.text}</p>
+                  </article>
+                ))}
+                {!selected.comments?.length && (
+                  <p className="muted">Start the discussion with your team.</p>
+                )}
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  run(
+                    () =>
+                      api.post(
+                        `/api/tasks/${selected._id}/comments`,
+                        { text: comment },
+                        auth(user),
+                      ),
+                    () => setComment(""),
+                  );
+                }}
+              >
+                <label>
+                  Add a comment
+                  <textarea
+                    required
+                    maxLength={2000}
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                  />
+                </label>
+                <button className="primary" disabled={busy || !comment.trim()}>
+                  {busy ? "Posting…" : "Post comment"}
+                </button>
+              </form>
+              {formError && (
+                <p role="alert" className="error">
+                  {formError}
+                </p>
+              )}
             </div>
-        </div>
-      )}
-
-      {/* --- INVITE USER MODAL --- */}
-      {showInviteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-sm shadow-xl">
-                <h3 className="text-lg font-bold mb-4">Invite Team Member</h3>
-                <form onSubmit={handleInvite}>
-                    <input 
-                        type="email" 
-                        placeholder="Enter user email..."
-                        className="w-full border p-2 rounded mb-4"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        required
-                    />
-                    <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => setShowInviteModal(false)} className="text-gray-500">Cancel</button>
-                        <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded">Invite</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-      )}
-
-      {/* --- TASK DETAILS & COMMENTS MODAL --- */}
-      {selectedTask && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto">
-                <div className="flex justify-between items-start mb-4">
-                    <h2 className="text-2xl font-bold text-gray-800">{selectedTask.title}</h2>
-                    <button onClick={() => setSelectedTask(null)} className="text-gray-500 text-xl font-bold">&times;</button>
-                </div>
-                <div className="mb-6">
-                    <p className="text-gray-600 whitespace-pre-wrap">{selectedTask.description || "No description provided."}</p>
-                </div>
-                <div className="flex gap-4 mb-6 text-sm">
-                    <div className="bg-gray-100 px-3 py-1 rounded"><span className="font-bold">Status:</span> {selectedTask.status}</div>
-                    <div className="bg-gray-100 px-3 py-1 rounded"><span className="font-bold">Priority:</span> {selectedTask.priority}</div>
-                </div>
-
-                {/* COMMENTS */}
-                <div className="border-t pt-4">
-                    <h3 className="font-bold text-gray-700 mb-3">Comments</h3>
-                    <div className="bg-gray-50 p-4 rounded mb-4 max-h-60 overflow-y-auto space-y-3">
-                        {selectedTask.comments && selectedTask.comments.length > 0 ? (
-                            selectedTask.comments.map((c, i) => (
-                                <div key={i} className="border-b pb-2 last:border-0">
-                                    <div className="flex justify-between items-center mb-1">
-                                        <span className="font-bold text-xs text-blue-600">{c.user?.name || "User"}</span>
-                                        <span className="text-xs text-gray-400">{new Date(c.createdAt).toLocaleString()}</span>
-                                    </div>
-                                    <p className="text-sm text-gray-700">{c.text}</p>
-                                </div>
-                            ))
-                        ) : (
-                            <p className="text-gray-400 text-sm italic">No comments yet.</p>
-                        )}
-                    </div>
-                    <div className="flex gap-2">
-                        <input 
-                            type="text"
-                            className="flex-1 border border-gray-300 p-2 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Write a comment..."
-                            value={commentText}
-                            onChange={(e) => setCommentText(e.target.value)}
-                        />
-                        <button onClick={handlePostComment} className="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Post</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-      )}
-
+          </Dialog>
+        )}
+        {invite && (
+          <Dialog
+            title="Add a project member"
+            onClose={() => !busy && setInvite(false)}
+          >
+            <form
+              className="form-stack"
+              onSubmit={(e) => {
+                e.preventDefault();
+                run(
+                  () =>
+                    api.put(
+                      `/api/projects/${id}/add-member`,
+                      { email },
+                      auth(user),
+                    ),
+                  () => {
+                    setInvite(false);
+                    setEmail("");
+                  },
+                );
+              }}
+            >
+              <p className="muted">
+                Add someone who has already registered. No invitation email is
+                sent.
+              </p>
+              <label>
+                Email
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </label>
+              {formError && (
+                <p role="alert" className="error">
+                  {formError}
+                </p>
+              )}
+              <button className="primary" disabled={busy}>
+                {busy ? "Adding…" : "Add member"}
+              </button>
+            </form>
+          </Dialog>
+        )}
+      </main>
     </div>
   );
-};
-
-export default Board;
+}

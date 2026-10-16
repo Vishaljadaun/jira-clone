@@ -1,43 +1,37 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const crypto = require("crypto");
+const { protect } = require("../middleware/authMiddleware");
 const router = express.Router();
-
-// 1. Config Storage (Where to save files)
-const storage = multer.diskStorage({
-  destination(req, file, cb) {
-    cb(null, 'uploads/'); // Save to 'uploads' folder
-  },
-  filename(req, file, cb) {
-    // Name file: fieldname-date.jpg
-    cb(null, `${file.fieldname}-${Date.now()}${path.extname(file.originalname)}`);
-  },
-});
-
-// 2. Check File Type (Images only)
-function checkFileType(file, cb) {
-  const filetypes = /jpg|jpeg|png/;
-  const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = filetypes.test(file.mimetype);
-
-  if (extname && mimetype) {
-    return cb(null, true);
-  } else {
-    cb('Images only!');
-  }
-}
-
+const destination = path.join(__dirname, "../uploads");
+fs.mkdirSync(destination, { recursive: true });
 const upload = multer({
-  storage,
-  fileFilter: function (req, file, cb) {
-    checkFileType(file, cb);
+  storage: multer.diskStorage({
+    destination,
+    filename: (req, file, cb) =>
+      cb(
+        null,
+        `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`,
+      ),
+  }),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const ok =
+      /^\.(jpg|jpeg|png)$/.test(
+        path.extname(file.originalname).toLowerCase(),
+      ) && ["image/jpeg", "image/png"].includes(file.mimetype);
+    cb(
+      ok
+        ? null
+        : Object.assign(new Error("Use a PNG or JPEG image."), { status: 400 }),
+      ok,
+    );
   },
 });
-
-// 3. The Route
-router.post('/', upload.single('image'), (req, res) => {
-  // Return the path like: /uploads/image-12345.jpg
-  res.send(`/${req.file.path.replace(/\\/g, "/")}`); 
+router.post("/", protect, upload.single("image"), (req, res) => {
+  if (!req.file) return res.status(400).json({ message: "Choose an image." });
+  res.send(`/uploads/${req.file.filename}`);
 });
-
 module.exports = router;
