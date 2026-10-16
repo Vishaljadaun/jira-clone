@@ -374,6 +374,14 @@ function ProjectBoard({ id }) {
                                     {...drag.dragHandleProps}
                                     aria-label={`Move ${task.title}`}
                                     className="drag-handle"
+                                    onFocus={(event) => {
+                                      // Keyboard dragging needs the full card in view,
+                                      // not just the handle near its top edge.
+                                      event.currentTarget.closest("article")?.scrollIntoView({
+                                        block: "nearest",
+                                        inline: "nearest",
+                                      });
+                                    }}
                                   >
                                     ⠿
                                   </span>
