@@ -98,6 +98,8 @@ exports.deleteTask = async (req, res) => {
     String(task.reporter) !== String(req.user._id)
   )
     fail(403, "Only the project owner or task creator can delete this task.");
+  if (!Number.isInteger(req.body?.version))
+    fail(409, "Reload this task before deleting.");
   const result = await Task.deleteOne({ _id: task._id, __v: req.body.version });
   if (!result.deletedCount)
     fail(409, "This task changed. Reload it before deleting.");

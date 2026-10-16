@@ -184,6 +184,11 @@ test("deletion requires creator or owner and matching version", async () => {
   await request(app)
     .delete(`/api/tasks/update/${task._id}`)
     .set(header(owner))
+    .send({})
+    .expect(409);
+  await request(app)
+    .delete(`/api/tasks/update/${task._id}`)
+    .set(header(owner))
     .send({ version: 999 })
     .expect(409);
   await request(app)

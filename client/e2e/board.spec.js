@@ -77,7 +77,7 @@ test("team board: create, assign, edit, comment, filter, realtime and mobile", a
   await expect(
     second
       .locator(".column-1")
-      .getByRole("button", { name: "Review checkout" }),
+      .getByRole("button", { name: "Review checkout", exact: true }),
   ).toBeVisible();
   // Keyboard drag and drop is supported in addition to the status form.
   const handle = page.getByRole("button", {
@@ -89,7 +89,7 @@ test("team board: create, assign, edit, comment, filter, realtime and mobile", a
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Space");
   await expect(
-    page.locator(".column-2").getByRole("button", { name: "Review checkout" }),
+    page.locator(".column-2").getByRole("button", { name: "Review checkout", exact: true }),
   ).toBeVisible();
   await page.getByLabel("Search tasks").fill("missing");
   await expect(
