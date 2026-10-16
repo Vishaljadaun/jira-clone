@@ -1,5 +1,5 @@
-const User = require('../models/User'); // Import the User model we created earlier
-const generateToken = require('../utils/generateToken'); // Import our token helper
+const User = require("../models/User"); // Import the User model we created earlier
+const generateToken = require("../utils/generateToken"); // Import our token helper
 
 // @desc    Register a new user
 // @route   POST /api/users
@@ -8,6 +8,23 @@ const registerUser = async (req, res) => {
   // 1. EXTRACT DATA FROM REQUEST BODY
   // In .NET API: [FromBody] RegisterDto model
   const { name, email, password } = req.body;
+  if (
+    typeof name !== "string" ||
+    !name.trim() ||
+    name.length > 100 ||
+    typeof email !== "string" ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+    email.length > 254 ||
+    typeof password !== "string" ||
+    password.length < 8 ||
+    Buffer.byteLength(password, "utf8") > 72
+  )
+    return res
+      .status(400)
+      .json({
+        message:
+          "Enter a name, valid email and password of at least 8 characters (up to 72 UTF-8 bytes).",
+      });
 
   try {
     // 2. CHECK IF USER ALREADY EXISTS
@@ -17,7 +34,7 @@ const registerUser = async (req, res) => {
     if (userExists) {
       // Return 400 Bad Request
       res.status(400);
-      throw new Error('User already exists');
+      throw new Error("User already exists");
     }
 
     // 3. CREATE THE USER
@@ -40,9 +57,8 @@ const registerUser = async (req, res) => {
       });
     } else {
       res.status(400);
-      throw new Error('Invalid user data');
+      throw new Error("Invalid user data");
     }
-    
   } catch (error) {
     // If any error occurs, send it to the client
     res.status(400).json({ message: error.message });
@@ -54,6 +70,10 @@ const registerUser = async (req, res) => {
 // @access  Public
 const authUser = async (req, res) => {
   const { email, password } = req.body;
+  if (typeof email !== "string" || typeof password !== "string")
+    return res
+      .status(400)
+      .json({ message: "Email and password are required." });
 
   try {
     // 1. Find the user by email
@@ -62,7 +82,6 @@ const authUser = async (req, res) => {
     // 2. Check if user exists AND if the password matches
     // We use the .matchPassword() method we defined in User.js
     if (user && (await user.matchPassword(password))) {
-      
       // 3. If correct, send back the user info + Token
       res.json({
         _id: user._id,
@@ -72,10 +91,9 @@ const authUser = async (req, res) => {
         avatar: user.avatar,
         token: generateToken(user._id),
       });
-
     } else {
       res.status(401); // 401 means "Unauthorized"
-      throw new Error('Invalid email or password');
+      throw new Error("Invalid email or password");
     }
   } catch (error) {
     res.status(401).json({ message: error.message });
@@ -90,9 +108,9 @@ const updateUserProfile = async (req, res) => {
   if (user) {
     // If the frontend sends a new avatar path, save it
     user.avatar = req.body.avatar || user.avatar;
-    
+
     // We can also update name/email here if we wanted
-    if(req.body.name) user.name = req.body.name;
+    if (req.body.name) user.name = req.body.name;
 
     const updatedUser = await user.save();
 
@@ -106,7 +124,7 @@ const updateUserProfile = async (req, res) => {
     });
   } else {
     res.status(404);
-    throw new Error('User not found');
+    throw new Error("User not found");
   }
 };
 

@@ -7,6 +7,8 @@ export default defineConfig({
   server: {
     proxy: {
       // This says: "If I ask for /api/anything, forward it to localhost:5000"
+      '/socket.io': { target: 'http://localhost:5000', ws: true },
+      '/uploads': { target: 'http://localhost:5000' },
       '/api': {
         target: 'http://localhost:5000',
         changeOrigin: true,
