@@ -1,4 +1,4 @@
-# Deploy the API first; connect the frontend once Render assigns the API URL.
+# API and static frontend. CLIENT_ORIGIN must match the frontend's assigned URL.
 # MongoDB is external. Supply MONGO_URI privately in Render's Blueprint form.
 services:
   - type: web
@@ -23,3 +23,20 @@ services:
         generateValue: true
       - key: CLIENT_ORIGIN
         sync: false
+  - type: web
+    name: jira-clone-web
+    runtime: static
+    branch: main
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NODE_VERSION
+        value: "22.16.0"
+      - key: VITE_SERVER_URL
+        value: https://jira-clone-api-srt8.onrender.com
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
